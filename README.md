@@ -1,1 +1,1 @@
-# EdupaperAi.com
+# EduPaperAi.com
