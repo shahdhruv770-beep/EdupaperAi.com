@@ -1,0 +1,1141 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+/* ═══════════════════════════════════════════════════════════
+   DATA
+═══════════════════════════════════════════════════════════ */
+const ALL_BOARDS = ["Central Board of Secondary Education (CBSE)","Council for the Indian School Certificate Examinations (ICSE / ISC)","National Institute of Open Schooling","Central Tibetan Schools Administration","International Baccalaureate","Cambridge Assessment International Education","Board of Secondary Education Andhra Pradesh","Andhra Pradesh Board of Intermediate Education","Arunachal Pradesh Board of Secondary Education","Board of Secondary Education Assam","Assam Higher Secondary Education Council","Bihar School Examination Board","Chhattisgarh Board of Secondary Education","Goa Board of Secondary and Higher Secondary Education","Gujarat Secondary and Higher Secondary Education Board (GSEB)","Board of School Education Haryana","Himachal Pradesh Board of School Education","Jammu and Kashmir Board of School Education","Jharkhand Academic Council","Karnataka School Examination and Assessment Board","Kerala Board of Public Examinations","Madhya Pradesh Board of Secondary Education","Maharashtra State Board of Secondary and Higher Secondary Education","Board of Secondary Education Manipur","Council of Higher Secondary Education Manipur","Meghalaya Board of School Education","Mizoram Board of School Education","Nagaland Board of School Education","Board of Secondary Education Odisha","Council of Higher Secondary Education Odisha","Punjab School Education Board","Board of Secondary Education Rajasthan","Tamil Nadu State Board of School Examination","Board of Secondary Education Telangana","Telangana State Board of Intermediate Education","Tripura Board of Secondary Education","Uttar Pradesh Madhyamik Shiksha Parishad","Uttarakhand Board of School Education","West Bengal Board of Secondary Education","West Bengal Council of Higher Secondary Education"];
+
+const ALL_UNIVERSITIES = ["Aligarh Muslim University – Uttar Pradesh","Assam University – Assam","Babasaheb Bhimrao Ambedkar University – Uttar Pradesh","Banaras Hindu University – Uttar Pradesh","Central Agricultural University – Manipur","Central University of Andhra Pradesh","Central University of Gujarat","Central University of Haryana","Central University of Himachal Pradesh","Central University of Jammu","Central University of Jharkhand","Central University of Karnataka","Central University of Kashmir","Central University of Kerala","Central University of Ladakh","Central University of Odisha","Central University of Punjab","Central University of Rajasthan","Central University of South Bihar","Central University of Tamil Nadu","Dr. Harisingh Gour University – Madhya Pradesh","Guru Ghasidas Vishwavidyalaya – Chhattisgarh","Hemvati Nandan Bahuguna Garhwal University","Indira Gandhi National Tribal University","Jamia Millia Islamia – Delhi","Jawaharlal Nehru University – Delhi","Mahatma Gandhi Central University – Bihar","Manipur University","Maulana Azad National Urdu University","Mizoram University","Nagaland University","North Eastern Hill University – Meghalaya","Pondicherry University","Rajiv Gandhi University – Arunachal Pradesh","Sikkim University","Tezpur University – Assam","The English and Foreign Languages University","Tripura University","University of Allahabad","University of Delhi","University of Hyderabad","Visva-Bharati University – West Bengal","Indira Gandhi National Open University – Delhi","Central Sanskrit University – Delhi","National Sanskrit University – Andhra Pradesh","Gujarat University – Ahmedabad","Sardar Patel University – Vallabh Vidyanagar","Veer Narmad South Gujarat University – Surat","Saurashtra University – Rajkot","Maharaja Krishnakumarsinhji Bhavnagar University","Hemchandracharya North Gujarat University – Patan","Gujarat Technological University – Ahmedabad","Gujarat Ayurved University – Jamnagar","Dr. Babasaheb Ambedkar Open University – Ahmedabad","Children's University – Gandhinagar","Kamdhenu University – Gandhinagar","Gujarat National Law University – Gandhinagar","Gujarat Maritime University – Gandhinagar","Gujarat Biotechnology University – Gandhinagar","Anand Agricultural University","Junagadh Agricultural University","Navsari Agricultural University","Sardarkrushinagar Dantiwada Agricultural University","Gujarat Vidyapith – Ahmedabad","Dharmsinh Desai University – Nadiad","Sumandeep Vidyapeeth – Vadodara","Institute of Advanced Research – Gandhinagar","Dhirubhai Ambani Institute of ICT – Gandhinagar","Nirma University – Ahmedabad","Ahmedabad University – Ahmedabad","Pandit Deendayal Energy University – Gandhinagar","Charotar University of Science and Technology","Ganpat University – Mehsana","Parul University – Vadodara","Marwadi University – Rajkot","Indus University – Ahmedabad","ITM Vocational University – Vadodara","Kadi Sarva Vishwavidyalaya – Gandhinagar","Calorx Teachers University – Ahmedabad","Sabarmati University – Ahmedabad","GLS University – Ahmedabad","Silver Oak University – Ahmedabad","Swarnim Startup & Innovation University – Gandhinagar"];
+
+const LANGUAGES = ["English","Hindi","Gujarati","Marathi","Bengali","Tamil","Telugu","Kannada","Malayalam","Punjabi","Urdu","Odia"];
+const DEGREES = ["B.A.","B.Sc.","B.Com.","B.Tech.","B.E.","BBA","BCA","B.Pharm","M.A.","M.Sc.","M.Com.","M.Tech.","MBA","MCA","Ph.D.","Diploma","Other"];
+const STREAMS_11_12 = ["Science (PCM)","Science (PCB)","Science (PCMB)","Commerce","Arts / Humanities"];
+
+const STREAM_SUBJECTS = {
+  "Science (PCM)": ["Physics","Chemistry","Mathematics","English","Computer Science","Physical Education"],
+  "Science (PCB)": ["Physics","Chemistry","Biology","English","Psychology","Physical Education"],
+  "Science (PCMB)": ["Physics","Chemistry","Mathematics","Biology","English","Computer Science"],
+  "Commerce": ["Accountancy","Business Studies","Economics","Mathematics","English","Entrepreneurship","Computer Science"],
+  "Arts / Humanities": ["History","Political Science","Geography","Economics","Sociology","Psychology","English","Hindi","Philosophy"],
+};
+
+/* ═══════════════════════════════════════════════════════════
+   IN-MEMORY STORE (simulates backend)
+═══════════════════════════════════════════════════════════ */
+const USERS_DB = {}; // email -> { firstName, lastName, password, results:[] }
+
+/* ═══════════════════════════════════════════════════════════
+   API HELPERS
+═══════════════════════════════════════════════════════════ */
+async function callClaude(prompt, maxTokens = 800) {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] })
+    });
+    const data = await res.json();
+    return data.content?.map(i => i.text || "").join("") || "";
+  } catch { return ""; }
+}
+
+async function fetchSubjects(config) {
+  // Build highly specific context so AI returns subjects for EXACTLY this board/university
+  let ctx = "", boardCtx = "";
+  if (config.isCollege) {
+    const sem = config.semester?.replace("Semester ","") || "";
+    ctx = `${config.degree} Semester ${sem} students at ${config.university}`;
+    boardCtx = `university: ${config.university}`;
+  } else if (config.stream) {
+    ctx = `Standard ${config.standard} ${config.stream} stream students under ${config.board}`;
+    boardCtx = `board: ${config.board}, stream: ${config.stream}`;
+  } else {
+    ctx = `Standard ${config.standard} students under ${config.board}`;
+    boardCtx = `board: ${config.board}`;
+  }
+  try {
+    const text = await callClaude(
+      "You are an expert on the Indian education system. " +
+      "List the official subjects taught to " + ctx + " in India, " +
+      "strictly following the " + boardCtx + " official curriculum and syllabus. " +
+      "Return ONLY a JSON array of subject names like [" + '"Mathematics","Physics"' + "]. " +
+      "Include 6-14 subjects. No markdown, no explanation, only the JSON array."
+    );
+    const parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    throw new Error("empty");
+  } catch {
+    return config.stream ? (STREAM_SUBJECTS[config.stream] || ["Mathematics","Science","English"]) : ["Mathematics","Science","English","Hindi","Social Science"];
+  }
+}
+
+async function generatePaper(config) {
+  const boardInfo = config.isCollege
+    ? (config.university + " — " + config.degree + " (" + config.semester + ")")
+    : (config.board + " — Standard " + config.standard + (config.stream ? " (" + config.stream + ")" : ""));
+  const seq = config.sequence==="easyFirst" ? "easy to moderate to hard"
+    : config.sequence==="hardFirst" ? "hard to moderate to easy" : "mixed/uneven";
+  const prompt =
+    "You are an expert Indian exam paper setter. Generate a COMPLETE, AUTHENTIC exam paper for:\n" +
+    "Board/Institution: " + boardInfo + "\n" +
+    "Subject: " + config.subject + "\n" +
+    "Language: " + config.language + " (write ALL question text in " + config.language + ")\n" +
+    "Use the OFFICIAL syllabus of " + boardInfo + " for " + config.subject + ". Model on actual past year paper patterns.\n" +
+    "Difficulty: Easy " + config.easy + "%, Moderate " + config.moderate + "%, Hard " + config.hard + "% | Sequence: " + seq + "\n" +
+    "Pattern: " + config.mcqs + " MCQs (1 mark), " + config.shortQ + " Short Answers (3 marks), " + config.longQ + " Long Answers (6 marks)\n" +
+    "Time: " + config.timeLimit + " min | Total marks: " + config.totalMarks + "\n" +
+    'Return ONLY valid JSON (no markdown, no extra text): {"title":"...","instructions":["..."],"sections":[' +
+    '{"name":"Section A – Multiple Choice Questions","marks_per_q":1,"questions":[{"id":1,"text":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A) ...","explanation":"...","difficulty":"easy"}]},' +
+    '{"name":"Section B – Short Answer Questions","marks_per_q":3,"questions":[{"id":1,"text":"...","answer":"...","explanation":"...","difficulty":"moderate"}]},' +
+    '{"name":"Section C – Long Answer Questions","marks_per_q":6,"questions":[{"id":1,"text":"...","answer":"...","explanation":"...","difficulty":"hard"}]}' +
+    ']}';
+  try {
+    const text = await callClaude(prompt, 4500);
+    const clean = text.replace(/```json|```/g,"").trim();
+    const start = clean.indexOf("{"); const end = clean.lastIndexOf("}");
+    return JSON.parse(start>=0 ? clean.slice(start, end+1) : clean);
+  } catch { return null; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SHARED UI ATOMS
+═══════════════════════════════════════════════════════════ */
+const F = "'Nunito',sans-serif";
+const FH = "'Playfair Display',serif";
+const BLUE = "#1a7fd4"; const LBLUE = "#e8f4ff"; const DBLUE = "#0d2a4a";
+
+function Tip({ children, label }) {
+  const [s, setS] = useState(false);
+  if (!label) return <>{children}</>;
+  return (
+    <div style={{ position:"relative", display:"inline-block" }} onMouseEnter={()=>setS(true)} onMouseLeave={()=>setS(false)}>
+      {children}
+      {s && <div style={{ position:"absolute", bottom:"115%", left:"50%", transform:"translateX(-50%)", background:DBLUE, color:"#fff", padding:"5px 10px", borderRadius:8, fontSize:11, fontFamily:F, whiteSpace:"nowrap", zIndex:9999, pointerEvents:"none", boxShadow:"0 2px 10px rgba(0,0,0,0.25)", maxWidth:220, textAlign:"center", whiteSpace:"normal", lineHeight:1.4 }}>{label}</div>}
+    </div>
+  );
+}
+
+function Hover({ children, scale=1.04, style={} }) {
+  const [h,setH] = useState(false);
+  return <div style={{ transform:h?`scale(${scale})`:"scale(1)", transition:"transform 0.18s cubic-bezier(.4,0,.2,1)", ...style }} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}>{children}</div>;
+}
+
+function Card({ children, style }) {
+  return <div style={{ background:"rgba(255,255,255,0.93)", backdropFilter:"blur(20px)", borderRadius:24, padding:"34px 38px", boxShadow:"0 12px 50px rgba(20,80,160,0.14)", border:"1.5px solid rgba(180,220,255,0.55)", width:"100%", maxWidth:580, boxSizing:"border-box", ...style }}>{children}</div>;
+}
+
+function Btn({ children, onClick, variant="primary", disabled, style, tip, full }) {
+  const [h,setH] = useState(false);
+  const vs = {
+    primary: { background:h&&!disabled?"linear-gradient(135deg,#5bbcf7,#2490e0)":"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", boxShadow:h&&!disabled?"0 6px 24px rgba(26,127,212,0.45)":"0 3px 12px rgba(26,127,212,0.3)" },
+    secondary: { background:h?"#dbeeff":LBLUE, color:BLUE, border:"1.5px solid #b8dff7" },
+    outline: { background:"transparent", color:BLUE, border:`2px solid ${BLUE}` },
+    danger: { background:"#fee8e8", color:"#c0392b", border:"1.5px solid #f5c6c6" },
+    ghost: { background:h?"rgba(26,127,212,0.08)":"transparent", color:"#5a8ab0", border:"none" },
+    success: { background:h?"#1e9e52":"#28a745", color:"#fff", boxShadow:"0 3px 10px rgba(40,167,69,0.3)" },
+  };
+  const btn = <button onClick={onClick} disabled={disabled} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+    style={{ padding:"11px 24px", borderRadius:12, border:"none", fontFamily:F, fontWeight:800, fontSize:14, cursor:disabled?"not-allowed":"pointer", transition:"all 0.18s", opacity:disabled?0.5:1, transform:h&&!disabled?"scale(1.04)":"scale(1)", width:full?"100%":undefined, ...vs[variant], ...style }}>
+    {children}
+  </button>;
+  return tip ? <Tip label={tip}>{btn}</Tip> : btn;
+}
+
+function Inp({ label, type="text", value, onChange, placeholder, error, note, autoFocus }) {
+  const [f,setF] = useState(false);
+  return (
+    <div style={{ marginBottom:14 }}>
+      {label && <label style={{ display:"flex", justifyContent:"space-between", marginBottom:5, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>{label}{note&&<span style={{ fontSize:11, color:"#90b4cc", fontWeight:600 }}>{note}</span>}</label>}
+      <input autoFocus={autoFocus} type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        style={{ width:"100%", padding:"11px 14px", borderRadius:12, boxSizing:"border-box", border:`2px solid ${error?"#f5a0a0":f?"#4ab0f5":"#b8dff7"}`, outline:"none", fontFamily:F, fontSize:14, color:DBLUE, background:"#f7fbff", transition:"border 0.2s,box-shadow 0.2s", boxShadow:f?"0 0 0 3px rgba(74,176,245,0.18)":"none" }}
+        onFocus={()=>setF(true)} onBlur={()=>setF(false)} />
+      {error && <div style={{ fontSize:12, color:"#e44", marginTop:4, fontFamily:F }}>{error}</div>}
+    </div>
+  );
+}
+
+function H({ children, sub }) {
+  return <div style={{ marginBottom:20, textAlign:"center" }}><h2 style={{ fontFamily:FH, fontSize:24, color:DBLUE, margin:0, fontWeight:900 }}>{children}</h2>{sub&&<p style={{ fontFamily:F, color:"#5a8ab0", fontSize:13, margin:"6px 0 0" }}>{sub}</p>}</div>;
+}
+
+function BackBtn({ onClick }) {
+  return <Tip label="Go back to previous step"><Hover scale={1.06}><button onClick={onClick} style={{ display:"flex", alignItems:"center", gap:6, background:"none", border:"none", cursor:"pointer", fontFamily:F, fontWeight:700, fontSize:13, color:"#5a8ab0", marginBottom:16, padding:"6px 12px", borderRadius:8, transition:"all 0.18s" }}>← Back</button></Hover></Tip>;
+}
+
+function ProgBar({ step, total }) {
+  const p = Math.round((step/total)*100);
+  return <div style={{ marginBottom:22 }}><div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}><span style={{ fontSize:12, color:"#5a8ab0", fontFamily:F, fontWeight:700 }}>Step {step} of {total}</span><span style={{ fontSize:12, color:BLUE, fontFamily:F, fontWeight:800 }}>{p}% complete</span></div><div style={{ background:"#d0e8f7", borderRadius:99, height:8, overflow:"hidden" }}><div style={{ height:"100%", borderRadius:99, width:`${p}%`, background:"linear-gradient(90deg,#4ab0f5,#1a7fd4)", transition:"width 0.5s cubic-bezier(.4,0,.2,1)" }}/></div></div>;
+}
+
+function SearchSel({ options, value, onChange, placeholder }) {
+  const [q,setQ]=useState(""); const [open,setOpen]=useState(false); const ref=useRef();
+  const filtered = options.filter(o=>o.toLowerCase().includes(q.toLowerCase()));
+  useEffect(()=>{const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h)},[]);
+  return (
+    <div ref={ref} style={{ position:"relative" }}>
+      <div onClick={()=>setOpen(!open)} style={{ border:`2px solid ${open?"#4ab0f5":"#b8dff7"}`, borderRadius:12, padding:"11px 14px", background:"#fff", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", color:value?DBLUE:"#90b8d4", fontFamily:F, fontSize:13, transition:"border 0.2s", boxShadow:open?"0 0 0 3px rgba(74,176,245,0.15)":"none" }}>
+        <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"92%" }}>{value||placeholder}</span>
+        <span style={{ fontSize:10, transform:open?"rotate(180deg)":"rotate(0)", transition:"transform 0.2s" }}>▼</span>
+      </div>
+      {open && <div style={{ position:"absolute", top:"110%", left:0, right:0, background:"#fff", border:"2px solid #b8dff7", borderRadius:12, zIndex:999, maxHeight:260, overflow:"hidden", boxShadow:"0 8px 32px rgba(0,100,200,0.16)" }}>
+        <input autoFocus placeholder="🔍 Search..." value={q} onChange={e=>setQ(e.target.value)} style={{ width:"100%", padding:"10px 14px", border:"none", borderBottom:"1px solid #e0f0ff", outline:"none", fontFamily:F, fontSize:13, boxSizing:"border-box" }}/>
+        <div style={{ overflowY:"auto", maxHeight:200 }}>
+          {filtered.length===0 ? <div style={{ padding:"12px 14px", color:"#aaa", fontSize:13, textAlign:"center" }}>No results found</div>
+          : filtered.map(opt=><Hover key={opt} scale={1.01}><div onClick={()=>{onChange(opt);setOpen(false);setQ("")}} style={{ padding:"9px 14px", cursor:"pointer", fontSize:12, fontFamily:F, background:value===opt?"#e8f4ff":"transparent", color:DBLUE, borderBottom:"1px solid #f0f8ff", transition:"background 0.1s" }} onMouseEnter={e=>e.target.style.background="#f0f8ff"} onMouseLeave={e=>e.target.style.background=value===opt?"#e8f4ff":"transparent"}>{opt}</div></Hover>)}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function Pill({ label, active, onClick, tip }) {
+  return <Tip label={tip}><Hover scale={1.07}><div onClick={onClick} style={{ padding:"6px 14px", borderRadius:99, cursor:"pointer", fontSize:13, border:`2px solid ${active?"#1a7fd4":"#c8ddf0"}`, background:active?"#e8f4ff":"#f7fbff", fontFamily:F, fontWeight:700, color:DBLUE, transition:"all 0.15s", boxShadow:active?"0 2px 10px rgba(26,127,212,0.22)":"none" }}>{label}</div></Hover></Tip>;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PROGRESS CHART (Result Page)
+═══════════════════════════════════════════════════════════ */
+function ProgressChart({ results }) {
+  if (!results || results.length === 0) return (
+    <div style={{ padding:"40px", textAlign:"center", color:"#5a8ab0", fontFamily:F }}>
+      <div style={{ fontSize:48, marginBottom:12 }}>📊</div>
+      <div style={{ fontSize:16, fontWeight:700 }}>No test results yet</div>
+      <div style={{ fontSize:13, marginTop:6 }}>Complete tests to see your progress here</div>
+    </div>
+  );
+
+  const maxMarks = Math.max(...results.map(r => r.total));
+  const W = 600, H = 260, PAD = 50, BAR_W = Math.min(50, (W - PAD * 2) / results.length - 10);
+
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <svg viewBox={`0 0 ${W} ${H + 80}`} style={{ width:"100%", fontFamily:F }}>
+        {/* Grid lines */}
+        {[0,25,50,75,100].map(p=>{
+          const y = PAD + (H-PAD*2) * (1 - p/100);
+          return <g key={p}><line x1={PAD} y1={y} x2={W-PAD} y2={y} stroke="#d0e8f7" strokeWidth={1} strokeDasharray="4"/><text x={PAD-6} y={y+4} textAnchor="end" fontSize={10} fill="#90b4cc">{p}%</text></g>;
+        })}
+        {/* Bars */}
+        {results.map((r, i) => {
+          const x = PAD + i * ((W - PAD*2) / results.length) + ((W - PAD*2) / results.length - BAR_W) / 2;
+          const pct = r.total > 0 ? r.score / r.total : 0;
+          const barH = (H - PAD*2) * pct;
+          const y = PAD + (H - PAD*2) - barH;
+          const color = pct >= 0.75 ? "#28a745" : pct >= 0.5 ? "#ffc107" : "#dc3545";
+          const dateStr = new Date(r.date).toLocaleDateString("en-IN",{day:"2-digit",month:"short"});
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={BAR_W} height={barH} rx={6} fill={color} opacity={0.85}/>
+              <text x={x+BAR_W/2} y={y-5} textAnchor="middle" fontSize={10} fill={color} fontWeight={800}>{Math.round(pct*100)}%</text>
+              <text x={x+BAR_W/2} y={H+5} textAnchor="middle" fontSize={9} fill="#5a8ab0">{dateStr}</text>
+              <text x={x+BAR_W/2} y={H+18} textAnchor="middle" fontSize={9} fill={DBLUE} fontWeight={700}>{(r.subject||"").slice(0,10)}</text>
+              <text x={x+BAR_W/2} y={H+31} textAnchor="middle" fontSize={9} fill="#5a8ab0">{r.score}/{r.total}</text>
+            </g>
+          );
+        })}
+        {/* Axes */}
+        <line x1={PAD} y1={PAD} x2={PAD} y2={H} stroke="#b8dff7" strokeWidth={2}/>
+        <line x1={PAD} y1={H} x2={W-PAD} y2={H} stroke="#b8dff7" strokeWidth={2}/>
+      </svg>
+      <div style={{ display:"flex", justifyContent:"center", gap:20, marginTop:8 }}>
+        {[["#28a745","≥75% (Good)"],["#ffc107","50-74% (Average)"],["#dc3545","<50% (Needs Work)"]].map(([c,l])=>(
+          <div key={l} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, fontFamily:F, color:"#5a8ab0" }}>
+            <div style={{ width:12, height:12, borderRadius:3, background:c }}/>
+            {l}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HOMEPAGE
+═══════════════════════════════════════════════════════════ */
+function Homepage({ onStart }) {
+  const WHO = [
+    {icon:"🎒",t:"School Students",d:"CBSE, ICSE & all 40+ state boards"},
+    {icon:"🎓",t:"College Students",d:"Semester papers for any degree"},
+    {icon:"👩‍🏫",t:"Teachers",d:"Generate, watermark & share papers"},
+    {icon:"🎩",t:"Professors",d:"University-grade papers instantly"},
+    {icon:"🏫",t:"Schools & Institutes",d:"Bulk papers for classrooms"},
+    {icon:"📊",t:"Coaching Centers",d:"Track student progress with analytics"},
+  ];
+  const HOW = [["01","Sign Up","Create your account in 2 minutes"],["02","Configure","Choose board, subject & difficulty"],["03","AI Generates","Syllabus-accurate paper in 30 seconds"],["04","Test & Learn","Timed test, scores & video solutions"]];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#c2e4f8 0%,#a0d0f0 50%,#7fc0e8 100%)", fontFamily:F }}>
+      {/* NAV */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"18px 32px", background:"rgba(255,255,255,0.3)", backdropFilter:"blur(10px)", borderBottom:"1px solid rgba(255,255,255,0.4)", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ fontFamily:FH, fontSize:22, fontWeight:900, color:DBLUE }}>📚 EduPaper AI</div>
+        <Tip label="Create your free account"><Hover scale={1.05}><button onClick={onStart} style={{ padding:"10px 24px", borderRadius:10, background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", border:"none", fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:F, boxShadow:"0 4px 16px rgba(26,127,212,0.35)", transition:"all 0.18s" }}>Get Started →</button></Hover></Tip>
+      </div>
+
+      {/* HERO */}
+      <div style={{ textAlign:"center", padding:"70px 24px 50px" }}>
+        <div style={{ display:"inline-block", background:"rgba(255,255,255,0.35)", borderRadius:99, padding:"6px 18px", marginBottom:18, fontSize:12, fontWeight:700, color:DBLUE, border:"1px solid rgba(255,255,255,0.6)" }}>🇮🇳 India's #1 AI Exam Paper Platform</div>
+        <h1 style={{ fontFamily:FH, fontSize:"clamp(28px,5.5vw,58px)", fontWeight:900, color:DBLUE, margin:"0 0 16px", lineHeight:1.15 }}>Generate Real Exam Papers<br/><span style={{ color:BLUE }}>Powered by AI</span></h1>
+        <p style={{ fontSize:16, color:"#1a4a70", maxWidth:560, margin:"0 auto 32px", lineHeight:1.65 }}>Board-aligned, syllabus-accurate question papers in seconds — with timed tests, scores, solutions & video explanations.</p>
+        <Hover scale={1.06}><button onClick={onStart} style={{ padding:"15px 42px", borderRadius:14, background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", fontSize:17, fontWeight:900, border:"none", cursor:"pointer", boxShadow:"0 8px 30px rgba(26,127,212,0.4)", transition:"all 0.2s", fontFamily:F }}>🚀 Get Started Free</button></Hover>
+        <div style={{ marginTop:12, fontSize:12, color:"#5a8ab0" }}>40+ Boards • 100+ Universities • Streams 11th/12th • Free Forever</div>
+      </div>
+
+      {/* WHO */}
+      <div style={{ padding:"10px 24px 50px", maxWidth:1100, margin:"0 auto" }}>
+        <div style={{ textAlign:"center", marginBottom:28 }}><h2 style={{ fontFamily:FH, fontSize:28, color:DBLUE, margin:"0 0 8px" }}>Who Is EduPaper AI For?</h2><p style={{ color:"#5a8ab0", fontSize:13 }}>Designed for every learner and educator across India</p></div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(175px,1fr))", gap:14 }}>
+          {WHO.map(u=><Hover key={u.t} scale={1.05}><div style={{ background:"rgba(255,255,255,0.75)", borderRadius:18, padding:"22px 18px", textAlign:"center", border:"1.5px solid rgba(255,255,255,0.6)", boxShadow:"0 2px 12px rgba(0,80,160,0.07)", cursor:"default" }}><div style={{ fontSize:34, marginBottom:10 }}>{u.icon}</div><div style={{ fontWeight:800, fontSize:14, color:DBLUE, marginBottom:5 }}>{u.t}</div><div style={{ fontSize:12, color:"#5a8ab0", lineHeight:1.5 }}>{u.d}</div></div></Hover>)}
+        </div>
+      </div>
+
+      {/* HOW */}
+      <div style={{ background:"rgba(255,255,255,0.3)", padding:"44px 24px", backdropFilter:"blur(8px)" }}>
+        <div style={{ maxWidth:860, margin:"0 auto" }}>
+          <div style={{ textAlign:"center", marginBottom:32 }}><h2 style={{ fontFamily:FH, fontSize:26, color:DBLUE, margin:"0 0 8px" }}>How It Works</h2><p style={{ color:"#5a8ab0", fontSize:13 }}>From signup to your first AI paper in under 3 minutes</p></div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:18 }}>
+            {HOW.map(([n,t,d])=><div key={n} style={{ textAlign:"center", padding:"18px 14px" }}><div style={{ width:48, height:48, borderRadius:"50%", background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:900, margin:"0 auto 12px", fontFamily:FH }}>{n}</div><div style={{ fontWeight:800, fontSize:14, color:DBLUE, marginBottom:5 }}>{t}</div><div style={{ fontSize:12, color:"#5a8ab0", lineHeight:1.5 }}>{d}</div></div>)}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ textAlign:"center", padding:"50px 24px" }}>
+        <h2 style={{ fontFamily:FH, fontSize:24, color:DBLUE, marginBottom:16 }}>Ready to Transform Your Exams?</h2>
+        <Hover scale={1.05}><button onClick={onStart} style={{ padding:"14px 38px", borderRadius:12, background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", fontSize:16, fontWeight:900, border:"none", cursor:"pointer", fontFamily:F, boxShadow:"0 6px 24px rgba(26,127,212,0.35)", transition:"all 0.18s" }}>✨ Start for Free</button></Hover>
+      </div>
+      <div style={{ textAlign:"center", padding:"14px", fontSize:12, color:"#7aaccc" }}>© 2025 EduPaper AI • Built for India's educators and learners</div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESULT / PROGRESS PAGE
+═══════════════════════════════════════════════════════════ */
+function ResultPage({ results, onBack }) {
+  const sorted = [...(results||[])].sort((a,b)=>new Date(a.date)-new Date(b.date));
+  return (
+    <Card style={{ maxWidth:760 }}>
+      <BackBtn onClick={onBack}/>
+      <H sub="Your complete exam history with dates, subjects and scores">📊 Progress Dashboard</H>
+      <ProgressChart results={sorted}/>
+      {sorted.length > 0 && (
+        <div style={{ marginTop:24 }}>
+          <div style={{ fontFamily:F, fontWeight:800, fontSize:14, color:DBLUE, marginBottom:12 }}>Recent Tests</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {[...sorted].reverse().slice(0,10).map((r,i)=>{
+              const pct = Math.round((r.score/r.total)*100);
+              const color = pct>=75?"#28a745":pct>=50?"#ffc107":"#dc3545";
+              return <div key={i} style={{ display:"flex", alignItems:"center", gap:14, padding:"12px 16px", background:"#f7fbff", borderRadius:12, border:"1.5px solid #d0e8f7" }}>
+                <div style={{ width:42, height:42, borderRadius:"50%", background:color, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, fontSize:14, flexShrink:0 }}>{pct}%</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE }}>{r.subject}</div>
+                  <div style={{ fontFamily:F, fontSize:11, color:"#5a8ab0" }}>{new Date(r.date).toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"})} • {r.standard||r.degree||""} {r.board||r.university||""}</div>
+                </div>
+                <div style={{ fontFamily:FH, fontWeight:900, fontSize:18, color }}>
+                  {r.score}/{r.total}
+                </div>
+              </div>;
+            })}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Signup / Login
+═══════════════════════════════════════════════════════════ */
+function Signup({ onNext }) {
+  const [tab, setTab] = useState("signup");
+  const [form, setForm] = useState({ firstName:"", lastName:"", email:"", password:"" });
+  const [errors, setErrors] = useState({});
+  const [showPw, setShowPw] = useState(false);
+  const [notice, setNotice] = useState("");
+  const pw = form.password;
+  const rules = [
+    { l:"At least 8 characters", ok:pw.length>=8 },
+    { l:"At least one uppercase letter (A-Z)", ok:/[A-Z]/.test(pw) },
+    { l:"At least one special character (!@#$...)", ok:/[^a-zA-Z0-9]/.test(pw) },
+    { l:"At least one number (0-9)", ok:/[0-9]/.test(pw) },
+  ];
+  const f=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const validate=()=>{
+    const e={};
+    if(tab==="signup"){
+      if(!form.firstName.trim()) e.firstName="Required";
+      if(!form.lastName.trim()) e.lastName="Required";
+      if(!rules.every(r=>r.ok)) e.password="Password doesn't meet all requirements";
+      if(USERS_DB[form.email.toLowerCase()]){ setTab("login"); setNotice("⚠️ Account already exists. Please login."); return false; }
+    }
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email="Enter a valid email";
+    setErrors(e); return !Object.keys(e).length;
+  };
+  const submit=()=>{
+    if(!validate()) return;
+    if(tab==="signup"){
+      USERS_DB[form.email.toLowerCase()]={ firstName:form.firstName, lastName:form.lastName, password:form.password, results:[] };
+    }
+    const user = USERS_DB[form.email.toLowerCase()] || { firstName:form.firstName||"User", lastName:form.lastName||"", results:[] };
+    onNext({ ...user, email:form.email.toLowerCase() });
+  };
+
+  return (
+    <Card>
+      <ProgBar step={1} total={2}/>
+      <div style={{ display:"flex", marginBottom:22, border:"2px solid #d0e8f7", borderRadius:12, overflow:"hidden" }}>
+        {["signup","login"].map(t=><div key={t} onClick={()=>{setTab(t);setNotice("");setErrors({})}} style={{ flex:1, textAlign:"center", padding:"10px", cursor:"pointer", background:tab===t?BLUE:"transparent", color:tab===t?"#fff":"#5a8ab0", fontWeight:800, fontSize:14, fontFamily:F, transition:"all 0.2s" }}>{t==="signup"?"Create Account":"Login"}</div>)}
+      </div>
+      {notice && <div style={{ padding:"10px 14px", background:"#fff3cd", borderRadius:10, marginBottom:14, fontFamily:F, fontSize:13, color:"#856404", border:"1.5px solid #ffeaa7" }}>{notice}</div>}
+      <H sub={tab==="signup"?"Join EduPaper AI — free forever":"Welcome back!"}>{tab==="signup"?"Create Your Account":"Login"}</H>
+      {tab==="signup"&&<div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}><Inp label="First Name" value={form.firstName} onChange={v=>f("firstName",v)} placeholder="Aarav" error={errors.firstName}/><Inp label="Last Name" value={form.lastName} onChange={v=>f("lastName",v)} placeholder="Sharma" error={errors.lastName}/></div>}
+      <Inp label="Email Address" value={form.email} onChange={v=>f("email",v)} placeholder="you@example.com" error={errors.email}/>
+      <div style={{ marginBottom:14 }}>
+        <label style={{ display:"flex", justifyContent:"space-between", marginBottom:5, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Password{tab==="signup"&&<span style={{ fontSize:11, color:"#90b4cc", fontWeight:600 }}>All 4 rules required</span>}</label>
+        <div style={{ position:"relative" }}>
+          <input type={showPw?"text":"password"} value={form.password} onChange={e=>f("password",e.target.value)} placeholder="Strong password" style={{ width:"100%", padding:"11px 44px 11px 14px", borderRadius:12, boxSizing:"border-box", border:`2px solid ${errors.password?"#f5a0a0":"#b8dff7"}`, outline:"none", fontFamily:F, fontSize:14, color:DBLUE, background:"#f7fbff" }}/>
+          <button onClick={()=>setShowPw(!showPw)} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", fontSize:16 }}>{showPw?"🙈":"👁️"}</button>
+        </div>
+        {tab==="signup"&&<div style={{ marginTop:8, padding:"11px 13px", background:"#f0f8ff", borderRadius:10, border:"1px solid #d0e8f7" }}>
+          {rules.map(r=><div key={r.l} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}><span style={{ fontSize:13 }}>{r.ok?"✅":"⭕"}</span><span style={{ fontFamily:F, fontSize:12, color:r.ok?"#1a6630":"#7a9ab0" }}>{r.l}</span></div>)}
+        </div>}
+        {errors.password&&<div style={{ fontSize:12, color:"#e44", marginTop:4, fontFamily:F }}>{errors.password}</div>}
+      </div>
+      <Btn full onClick={submit} tip={tab==="signup"?"Create account and continue":"Login to your account"}>{tab==="signup"?"Create Account & Continue →":"Login →"}</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Designation
+═══════════════════════════════════════════════════════════ */
+function Designation({ onBack, onSelect }) {
+  const [sel,setSel]=useState(null);
+  return (
+    <Card>
+      <ProgBar step={2} total={2}/>
+      <BackBtn onClick={onBack}/>
+      <H sub="This helps us personalize your experience">Who Are You?</H>
+      <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:22 }}>
+        {[{v:"Teacher",icon:"👩‍🏫",d:"Generate, share & manage exam papers with full control"},{v:"Student",icon:"🎓",d:"Practice with AI-generated papers & track your progress"}].map(o=>(
+          <Tip key={o.v} label={`Select if you are a ${o.v.toLowerCase()}`}>
+            <Hover scale={1.02}><div onClick={()=>setSel(o.v)} style={{ padding:"16px 18px", borderRadius:14, cursor:"pointer", border:`2px solid ${sel===o.v?BLUE:"#c0ddf0"}`, background:sel===o.v?LBLUE:"#f7fbff", display:"flex", alignItems:"center", gap:14, transition:"all 0.18s", boxShadow:sel===o.v?"0 4px 16px rgba(26,127,212,0.18)":"none" }}>
+              <div style={{ width:20, height:20, borderRadius:"50%", border:`2px solid ${sel===o.v?BLUE:"#b0ccdf"}`, background:sel===o.v?BLUE:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{sel===o.v&&<div style={{ width:7, height:7, borderRadius:"50%", background:"#fff" }}/>}</div>
+              <div><div style={{ fontFamily:FH, fontSize:16, fontWeight:700, color:DBLUE }}>{o.icon} {o.v}</div><div style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", marginTop:2 }}>{o.d}</div></div>
+            </div></Hover>
+          </Tip>
+        ))}
+      </div>
+      <Btn full disabled={!sel} onClick={()=>sel&&onSelect(sel)} tip="Continue to your experience">Continue as {sel||"..."} →</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Teacher Password
+═══════════════════════════════════════════════════════════ */
+function TeacherPw({ onBack, onNext, allResults }) {
+  const [pw,setPw]=useState(""); const [err,setErr]=useState(""); const [show,setShow]=useState(false); const [showR,setShowR]=useState(false);
+  const rules=[{l:"First character must be special (!@#$...)",ok:/^[^a-zA-Z0-9]/.test(pw)},{l:"At least 2 numbers",ok:(pw.match(/[0-9]/g)||[]).length>=2},{l:"At least 5 characters total",ok:pw.length>=5}];
+  const entries = Object.entries(allResults||{});
+  return (
+    <Card style={{ maxWidth:620 }}>
+      <BackBtn onClick={onBack}/>
+      <H sub="Teacher accounts require additional verification">Teacher Verification</H>
+      {/* Student results accordion */}
+      <div style={{ marginBottom:18, border:"1.5px solid #d0e8f7", borderRadius:14, overflow:"hidden" }}>
+        <Hover scale={1.01}><div onClick={()=>setShowR(!showR)} style={{ padding:"13px 16px", background:LBLUE, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE }}>
+          <span>📊 Student Results & Progress ({entries.length} submissions)</span>
+          <span style={{ transition:"transform 0.2s", transform:showR?"rotate(180deg)":"rotate(0)" }}>▼</span>
+        </div></Hover>
+        {showR&&<div style={{ padding:"14px 16px", background:"#f7fbff" }}>
+          {entries.length===0 ? <div style={{ textAlign:"center", padding:"14px", color:"#90b4cc", fontFamily:F, fontSize:13 }}>📋 No student submissions yet. Share your paper link to get started.</div>
+          : entries.map(([name,r])=><div key={name} style={{ padding:"10px 12px", marginBottom:8, background:"#fff", borderRadius:10, border:"1px solid #d0e8f7" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", fontFamily:F, fontSize:13, marginBottom:5 }}><span style={{ fontWeight:700, color:DBLUE }}>{name}</span><span style={{ fontWeight:800, color:BLUE }}>{r.score}/{r.total} ({Math.round((r.score/r.total)*100)}%)</span></div>
+            <div style={{ background:"#d0e8f7", borderRadius:99, height:6 }}><div style={{ height:"100%", borderRadius:99, background:"linear-gradient(90deg,#4ab0f5,#1a7fd4)", width:`${(r.score/r.total)*100}%`, transition:"width 0.7s" }}/></div>
+          </div>)}
+        </div>}
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <label style={{ display:"block", marginBottom:5, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Teacher Access Password</label>
+        <div style={{ position:"relative" }}>
+          <input type={show?"text":"password"} value={pw} onChange={e=>{setPw(e.target.value);setErr("")}} placeholder="e.g. @teacher12" style={{ width:"100%", padding:"11px 44px 11px 14px", borderRadius:12, boxSizing:"border-box", border:`2px solid ${err?"#f5a0a0":"#b8dff7"}`, outline:"none", fontFamily:F, fontSize:14, color:DBLUE, background:"#f7fbff" }}/>
+          <button onClick={()=>setShow(!show)} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", fontSize:16 }}>{show?"🙈":"👁️"}</button>
+        </div>
+        <div style={{ marginTop:8, padding:"11px 13px", background:"#f0f8ff", borderRadius:10, border:"1px solid #d0e8f7" }}>
+          {rules.map(r=><div key={r.l} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}><span style={{ fontSize:13 }}>{r.ok?"✅":"⭕"}</span><span style={{ fontFamily:F, fontSize:12, color:r.ok?"#1a6630":"#7a9ab0" }}>{r.l}</span></div>)}
+        </div>
+        {err&&<div style={{ fontSize:12, color:"#e44", marginTop:4, fontFamily:F }}>{err}</div>}
+      </div>
+      <Btn full onClick={()=>{if(!rules.every(r=>r.ok)){setErr("Password doesn't meet all conditions");return;}onNext()}} tip="Verify and access teacher dashboard">Verify & Continue →</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Teacher Method
+═══════════════════════════════════════════════════════════ */
+function TeacherMethod({ onBack, onSelect }) {
+  return (
+    <Card>
+      <BackBtn onClick={onBack}/>
+      <H sub="Choose how to create your exam paper">Create Exam Paper</H>
+      <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        {[{m:"manual",icon:"✏️",label:"Generate Manually",desc:"Write questions with a rich text editor — fonts, tables, formulas & more",tip:"Full creative control over every question and formatting"},{m:"ai",icon:"🤖",label:"Generate by AI",desc:"AI creates syllabus-aligned paper using official curriculum & past year papers",badge:"AI POWERED",tip:"Paper generated using official syllabus + past year patterns in 30 seconds"}].map(o=>(
+          <Tip key={o.m} label={o.tip}>
+            <Hover scale={1.02}><div onClick={()=>onSelect(o.m)} style={{ padding:"20px 22px", borderRadius:16, cursor:"pointer", border:"2px solid #c0ddf0", background:"#f7fbff", transition:"all 0.18s", textAlign:"center", position:"relative", overflow:"hidden" }} onMouseEnter={e=>{e.currentTarget.style.borderColor=BLUE;e.currentTarget.style.background=LBLUE}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#c0ddf0";e.currentTarget.style.background="#f7fbff"}}>
+              {o.badge&&<div style={{ position:"absolute", top:8, right:12, background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", fontSize:9, fontWeight:900, padding:"2px 8px", borderRadius:99, fontFamily:F }}>{o.badge}</div>}
+              <div style={{ fontSize:34, marginBottom:7 }}>{o.icon}</div>
+              <div style={{ fontFamily:FH, fontSize:16, fontWeight:700, color:DBLUE }}>{o.label}</div>
+              <div style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", marginTop:4 }}>{o.desc}</div>
+            </div></Hover>
+          </Tip>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Manual Editor (rich)
+═══════════════════════════════════════════════════════════ */
+function ManualEditor({ onBack }) {
+  const editorRef = useRef();
+  const [title,setTitle]=useState(""); const [wm,setWm]=useState(""); const [addWm,setAddWm]=useState(false); const [copied,setCopied]=useState(false);
+  const link = useRef(`https://edupaper.ai/paper/${Math.random().toString(36).substr(2,9)}`);
+
+  const exec=(cmd,val=null)=>{ editorRef.current?.focus(); document.execCommand(cmd,false,val); };
+  const insertText=(text)=>{ editorRef.current?.focus(); document.execCommand("insertText",false,text); };
+
+  const FONT_FAMILIES=["Arial","Times New Roman","Georgia","Courier New","Verdana","Trebuchet MS","Comic Sans MS","Impact"];
+  const FONT_SIZES=["10px","12px","14px","16px","18px","20px","24px","28px","32px"];
+
+  const toolGroups = [
+    { name:"Format", tools:[
+      {cmd:"bold",label:"B",style:{fontWeight:"900"},tip:"Bold text"},
+      {cmd:"italic",label:"I",style:{fontStyle:"italic"},tip:"Italic text"},
+      {cmd:"underline",label:"U",style:{textDecoration:"underline"},tip:"Underline text"},
+      {cmd:"strikeThrough",label:"S̶",tip:"Strikethrough"},
+    ]},
+    { name:"Align", tools:[
+      {cmd:"justifyLeft",label:"⬅",tip:"Align left"},
+      {cmd:"justifyCenter",label:"☰",tip:"Center align"},
+      {cmd:"justifyRight",label:"➡",tip:"Align right"},
+    ]},
+    { name:"Lists", tools:[
+      {cmd:"insertUnorderedList",label:"• List",tip:"Bullet list"},
+      {cmd:"insertOrderedList",label:"1. List",tip:"Numbered list"},
+    ]},
+    { name:"Heading", tools:[
+      {label:"H1",tip:"Heading 1",action:()=>exec("formatBlock","h1")},
+      {label:"H2",tip:"Heading 2",action:()=>exec("formatBlock","h2")},
+      {label:"H3",tip:"Heading 3",action:()=>exec("formatBlock","h3")},
+    ]},
+    { name:"Insert", tools:[
+      {label:"─────",tip:"Insert horizontal divider",action:()=>exec("insertHTML","<hr style='border:1px solid #d0e8f7;margin:12px 0'/>")},
+      {label:"Table",tip:"Insert 3×3 table",action:()=>exec("insertHTML","<table border='1' style='border-collapse:collapse;width:100%;margin:8px 0'><tr><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td></tr><tr><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td><td style='padding:6px;border:1px solid #b8dff7'>&nbsp;</td></tr></table>")},
+      {label:"∑ Formula",tip:"Insert math formula placeholder",action:()=>insertText("[formula: ]")},
+      {label:"MCQ",tip:"Insert MCQ template",action:()=>exec("insertHTML","<p><b>Q. Question text here?</b></p><p>(A) Option 1 &nbsp;&nbsp; (B) Option 2 &nbsp;&nbsp; (C) Option 3 &nbsp;&nbsp; (D) Option 4</p><p><i>Ans: </i></p><br/>")},
+    ]},
+  ];
+
+  return (
+    <Card style={{ maxWidth:960 }}>
+      <BackBtn onClick={onBack}/>
+      <H sub="Write your exam paper with full formatting control">Manual Paper Editor</H>
+      <Inp label="Paper Title" value={title} onChange={setTitle} placeholder="e.g. Class 10 Science – Term 2 Examination"/>
+
+      {/* Toolbar */}
+      <div style={{ marginBottom:6 }}>
+        <div style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap", alignItems:"center" }}>
+          {/* Font family */}
+          <Tip label="Choose font family">
+            <select onChange={e=>exec("fontName",e.target.value)} style={{ padding:"5px 8px", borderRadius:7, border:"1.5px solid #b8dff7", fontFamily:F, fontSize:12, background:"#f0f8ff", color:BLUE, cursor:"pointer" }}>
+              <option value="">Font Family</option>
+              {FONT_FAMILIES.map(ff=><option key={ff} value={ff}>{ff}</option>)}
+            </select>
+          </Tip>
+          {/* Font size */}
+          <Tip label="Choose font size">
+            <select onChange={e=>{exec("fontSize",3);const sel=window.getSelection();if(sel&&sel.rangeCount){const span=document.createElement("span");span.style.fontSize=e.target.value;sel.getRangeAt(0).surroundContents(span);}}} style={{ padding:"5px 8px", borderRadius:7, border:"1.5px solid #b8dff7", fontFamily:F, fontSize:12, background:"#f0f8ff", color:BLUE, cursor:"pointer" }}>
+              <option value="">Font Size</option>
+              {FONT_SIZES.map(fs=><option key={fs} value={fs}>{fs}</option>)}
+            </select>
+          </Tip>
+          {/* Text color */}
+          <Tip label="Text color"><div style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ fontSize:12, fontFamily:F, color:DBLUE }}>Color:</span><input type="color" defaultValue="#1a3a5c" onChange={e=>exec("foreColor",e.target.value)} style={{ width:28, height:28, border:"1.5px solid #b8dff7", borderRadius:5, cursor:"pointer", padding:2 }}/></div></Tip>
+          {/* Highlight */}
+          <Tip label="Highlight color"><div style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ fontSize:12, fontFamily:F, color:DBLUE }}>Highlight:</span><input type="color" defaultValue="#ffff00" onChange={e=>exec("hiliteColor",e.target.value)} style={{ width:28, height:28, border:"1.5px solid #b8dff7", borderRadius:5, cursor:"pointer", padding:2 }}/></div></Tip>
+        </div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {toolGroups.map(g=>g.tools.map(t=>(
+            <Tip key={t.label} label={t.tip}>
+              <Hover scale={1.1}><button onClick={()=>t.action?t.action():exec(t.cmd)} style={{ padding:"5px 11px", borderRadius:7, border:"1.5px solid #b8dff7", background:"#f0f8ff", color:BLUE, fontFamily:F, fontSize:12, fontWeight:700, cursor:"pointer", transition:"all 0.15s", ...t.style }}>{t.label}</button></Hover>
+            </Tip>
+          )))}
+          <Tip label="Clear all formatting"><Hover scale={1.1}><button onClick={()=>exec("removeFormat")} style={{ padding:"5px 11px", borderRadius:7, border:"1.5px solid #f5a0a0", background:"#fff0f0", color:"#c0392b", fontFamily:F, fontSize:12, fontWeight:700, cursor:"pointer" }}>✕ Clear</button></Hover></Tip>
+        </div>
+      </div>
+
+      {/* Editor */}
+      <div ref={editorRef} contentEditable suppressContentEditableWarning
+        style={{ width:"100%", minHeight:360, padding:"16px", borderRadius:12, boxSizing:"border-box", border:"2px solid #b8dff7", outline:"none", fontFamily:"Georgia,serif", fontSize:14, color:DBLUE, background:"#fafcff", lineHeight:1.8, marginBottom:14 }}
+        onFocus={e=>e.target.style.boxShadow="0 0 0 3px rgba(74,176,245,0.2)"} onBlur={e=>e.target.style.boxShadow="none"}
+        data-placeholder="Start writing your exam paper here..."/>
+
+      {/* Watermark */}
+      <div style={{ padding:"12px 15px", background:"#f0f8ff", borderRadius:12, marginBottom:15 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:addWm?12:0 }}>
+          <input type="checkbox" checked={addWm} onChange={e=>setAddWm(e.target.checked)} id="wmM" style={{ width:15, height:15, accentColor:BLUE }}/>
+          <label htmlFor="wmM" style={{ fontFamily:F, fontWeight:700, fontSize:13, color:DBLUE, cursor:"pointer" }}>🔏 Add Watermark to Paper</label>
+        </div>
+        {addWm&&<Inp value={wm} onChange={setWm} placeholder="e.g. Confidential – Delhi Public School"/>}
+      </div>
+
+      {/* Share link */}
+      <div style={{ padding:"11px 14px", background:LBLUE, borderRadius:10, marginBottom:14, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <span style={{ fontFamily:F, fontSize:11, color:DBLUE, flex:1, wordBreak:"break-all" }}>🔗 {link.current}</span>
+        <Tip label="Copy sharable link for students"><Btn variant="secondary" style={{ fontSize:11, padding:"5px 12px" }} onClick={()=>{navigator.clipboard?.writeText(link.current);setCopied(true);setTimeout(()=>setCopied(false),2000)}}>{copied?"✓ Copied!":"Copy Link"}</Btn></Tip>
+      </div>
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+        <Tip label="Save paper to your account"><Btn style={{ flex:1 }}>💾 Save</Btn></Tip>
+        <Tip label="Export as downloadable PDF"><Btn variant="outline" style={{ flex:1 }}>📄 Download PDF</Btn></Tip>
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Level Select
+═══════════════════════════════════════════════════════════ */
+function LevelSelect({ onBack, onNext, role }) {
+  const [level,setLevel]=useState(null); const [std,setStd]=useState(""); const [stream,setStream]=useState(""); const [deg,setDeg]=useState(""); const [sem,setSem]=useState("");
+  const is1112 = std==="11"||std==="12";
+  const canGo = level==="school" ? (std && (!is1112||stream)) : (deg&&sem);
+  return (
+    <Card>
+      <BackBtn onClick={onBack}/>
+      <H sub={`Tell us about ${role==="teacher"?"your students'":"your"} education level`}>Education Level</H>
+      <div style={{ display:"flex", gap:12, marginBottom:20 }}>
+        {[{v:"school",icon:"🏫",l:"School"},{v:"college",icon:"🎓",l:"College / University"}].map(o=>(
+          <Tip key={o.v} label={`Select if ${role==="teacher"?"for":""} ${o.l}`}>
+            <Hover scale={1.03}><div onClick={()=>{setLevel(o.v);setStd("");setStream("");setDeg("");setSem("")}} style={{ flex:1, padding:"15px 12px", borderRadius:14, cursor:"pointer", textAlign:"center", border:`2px solid ${level===o.v?BLUE:"#c0ddf0"}`, background:level===o.v?LBLUE:"#f7fbff", transition:"all 0.18s" }}>
+              <div style={{ fontSize:26, marginBottom:5 }}>{o.icon}</div>
+              <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE }}>{o.l}</div>
+            </div></Hover>
+          </Tip>
+        ))}
+      </div>
+      {level==="school"&&(
+        <>
+          <div style={{ marginBottom:14 }}>
+            <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Select Standard / Class</label>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:7 }}>
+              {Array.from({length:12},(_,i)=>`${i+1}`).map(s=>(
+                <Tip key={s} label={`Standard ${s}`}><Hover scale={1.1}><div onClick={()=>{setStd(s);setStream("")}} style={{ padding:"10px 4px", borderRadius:10, cursor:"pointer", textAlign:"center", fontSize:15, border:`2px solid ${std===s?BLUE:"#c0ddf0"}`, background:std===s?LBLUE:"#f7fbff", fontFamily:F, fontWeight:800, color:DBLUE, transition:"all 0.15s" }}>{s}</div></Hover></Tip>
+              ))}
+            </div>
+          </div>
+          {is1112&&(
+            <div style={{ marginBottom:14 }}>
+              <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Select Stream <span style={{ fontSize:11, color:"#f08000", fontWeight:600 }}>(Required for Std 11 & 12)</span></label>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                {STREAMS_11_12.map(s=><Tip key={s} label={`Select ${s} stream`}><Pill label={s} active={stream===s} onClick={()=>setStream(s)}/></Tip>)}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {level==="college"&&(
+        <>
+          <div style={{ marginBottom:14 }}>
+            <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Degree Program</label>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>{DEGREES.map(d=><Tip key={d} label={`Select ${d}`}><Pill label={d} active={deg===d} onClick={()=>setDeg(d)}/></Tip>)}</div>
+          </div>
+          <div style={{ marginBottom:14 }}>
+            <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Semester</label>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>{Array.from({length:8},(_,i)=>`Semester ${i+1}`).map(s=><Tip key={s} label={s}><Pill label={s.replace("Semester ","Sem ")} active={sem===s} onClick={()=>setSem(s)}/></Tip>)}</div>
+          </div>
+        </>
+      )}
+      <Btn full disabled={!canGo} onClick={()=>onNext({level,standard:std,stream,degree:deg,semester:sem,isCollege:level==="college"})} tip="Proceed to select board or university" style={{ marginTop:6 }}>Continue →</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Board / University Select
+═══════════════════════════════════════════════════════════ */
+function BoardSelect({ onBack, onNext, levelData }) {
+  const [val,setVal]=useState("");
+  const isC = levelData.isCollege;
+  return (
+    <Card>
+      <BackBtn onClick={onBack}/>
+      <H sub={isC?"Search and select your university":"Search and select your board"}>{isC?"🏛️ University":"📋 Education Board"}</H>
+      <div style={{ marginBottom:14 }}>
+        <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>{isC?"University":"Board"} <span style={{ fontSize:11, color:"#90b4cc", fontWeight:600 }}>(type to filter)</span></label>
+        <SearchSel options={isC?ALL_UNIVERSITIES:ALL_BOARDS} value={val} onChange={setVal} placeholder={isC?"e.g. Gujarat Technological University...":"e.g. CBSE, GSEB..."}/>
+      </div>
+      {val&&<div style={{ padding:"10px 14px", background:LBLUE, borderRadius:10, marginBottom:12, fontFamily:F, fontSize:12, color:BLUE, fontWeight:700, border:"1.5px solid #b8dff7" }}>✓ Selected: {val}</div>}
+      <Btn full disabled={!val} onClick={()=>onNext({...levelData,board:isC?"":val,university:isC?val:""})} tip="Proceed to paper configuration">Continue →</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Paper Config
+═══════════════════════════════════════════════════════════ */
+function PaperConfig({ onBack, onNext, config }) {
+  const [subject,setSubject]=useState(""); const [subjects,setSubjects]=useState([]); const [loadSub,setLoadSub]=useState(false);
+  const [lang,setLang]=useState("English"); const [easy,setEasy]=useState(40); const [moderate,setModerate]=useState(40); const [hard,setHard]=useState(20);
+  const [mcqs,setMcqs]=useState(10); const [shortQ,setShortQ]=useState(5); const [longQ,setLongQ]=useState(3);
+  const [timeLimit,setTimeLimit]=useState(60); const [totalMarks,setTotalMarks]=useState(50);
+  const [wm,setWm]=useState(""); const [addWm,setAddWm]=useState(config.role==="teacher");
+  const [seq,setSeq]=useState("easyFirst");
+  const total=easy+moderate+hard;
+  const isTeacher = config.role==="teacher";
+
+  useEffect(()=>{
+    setLoadSub(true);
+    if(config.stream && STREAM_SUBJECTS[config.stream]) {
+      setSubjects(STREAM_SUBJECTS[config.stream]);
+      setLoadSub(false);
+    } else {
+      fetchSubjects(config).then(list=>{setSubjects(list);setLoadSub(false);});
+    }
+  },[]);
+
+  return (
+    <Card style={{ maxWidth:640 }}>
+      <BackBtn onClick={onBack}/>
+      <H sub="Customize your AI-generated exam paper">Paper Configuration</H>
+
+      {/* Context banner – shows what board/university the AI is using */}
+      <div style={{ padding:"10px 14px", background:"linear-gradient(135deg,#e8f4ff,#f0f9ff)", borderRadius:12, marginBottom:16, border:"1.5px solid #b8dff7", display:"flex", alignItems:"flex-start", gap:10 }}>
+        <span style={{ fontSize:18, flexShrink:0 }}>🤖</span>
+        <div>
+          <div style={{ fontFamily:F, fontWeight:800, fontSize:12, color:DBLUE, marginBottom:3 }}>AI is tailoring this paper for:</div>
+          <div style={{ fontFamily:F, fontSize:12, color:"#1a7fd4", fontWeight:700 }}>
+            {config.isCollege
+              ? `${config.university} · ${config.degree} · ${config.semester}`
+              : `${config.board} · Std ${config.standard}${config.stream ? ` · ${config.stream}` : ""}`}
+          </div>
+          <div style={{ fontFamily:F, fontSize:11, color:"#5a8ab0", marginTop:2 }}>
+            Subjects and syllabus are fetched from the official {config.isCollege ? "university" : "board"} curriculum
+          </div>
+        </div>
+      </div>
+
+      {/* Subject */}
+      <div style={{ marginBottom:16 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+          <span style={{ fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Subject</span>
+          <span style={{ fontSize:9, fontWeight:900, padding:"2px 8px", borderRadius:99, background:"linear-gradient(135deg,#4ab0f5,#1a7fd4)", color:"#fff", fontFamily:F }}>AI — OFFICIAL SYLLABUS</span>
+          {loadSub&&<span style={{ fontSize:11, color:"#5a8ab0", fontFamily:F }}>🔄 Fetching from {config.board||config.university}...</span>}
+        </div>
+        {subjects.length>0 ? (
+          <>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:10 }}>
+              {subjects.map(s=><Tip key={s} label={`Select ${s} as subject`}><Pill label={s} active={subject===s} onClick={()=>setSubject(s)}/></Tip>)}
+            </div>
+            <input value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Or type a custom subject..." style={{ width:"100%", padding:"9px 12px", borderRadius:10, border:"2px solid #b8dff7", fontFamily:F, fontSize:13, color:DBLUE, background:"#f7fbff", outline:"none", boxSizing:"border-box" }}/>
+          </>
+        ) : loadSub ? (
+          <div style={{ padding:"16px", borderRadius:12, background:"#f0f8ff", border:"2px dashed #b8dff7", textAlign:"center", fontFamily:F, fontSize:13, color:"#5a8ab0" }}>
+            <div style={{ fontSize:20, marginBottom:5 }}>🤖</div>
+            AI fetching subjects for <strong style={{ color:BLUE }}>{config.board||config.university}</strong> from official curriculum...
+          </div>
+        ) : (
+          <input value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Type subject name..." style={{ width:"100%", padding:"11px 14px", borderRadius:12, border:"2px solid #b8dff7", fontFamily:F, fontSize:14, color:DBLUE, background:"#f7fbff", outline:"none", boxSizing:"border-box" }}/>
+        )}
+      </div>
+
+      {/* Language */}
+      <div style={{ marginBottom:14 }}>
+        <label style={{ display:"block", marginBottom:7, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>Language of Paper</label>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>{LANGUAGES.map(l=><Tip key={l} label={`Generate paper in ${l}`}><Pill label={l} active={lang===l} onClick={()=>setLang(l)}/></Tip>)}</div>
+      </div>
+
+      {/* Difficulty */}
+      <div style={{ padding:"13px 16px", background:"#f0f8ff", borderRadius:12, marginBottom:13 }}>
+        <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE, marginBottom:11 }}>
+          Difficulty Distribution {total!==100&&<span style={{ color:"#e66", fontSize:11 }}> — must total 100% (now {total}%)</span>}
+        </div>
+        {[["Easy 🟢",easy,setEasy,"#28a745","Basic recall questions"],["Moderate 🟡",moderate,setModerate,"#ffc107","Understanding & application"],["Hard 🔴",hard,setHard,"#dc3545","Complex problem solving"]].map(([label,val,set,color,tip])=>(
+          <Tip key={label} label={tip}><div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+            <span style={{ fontFamily:F, fontSize:12, width:100, color:DBLUE, fontWeight:700 }}>{label}</span>
+            <input type="range" min={0} max={100} value={val} onChange={e=>set(+e.target.value)} style={{ flex:1, accentColor:color }}/>
+            <span style={{ fontFamily:F, fontSize:13, fontWeight:800, color, width:36, textAlign:"right" }}>{val}%</span>
+          </div></Tip>
+        ))}
+      </div>
+
+      {/* Pattern */}
+      <div style={{ padding:"13px 16px", background:"#f0f8ff", borderRadius:12, marginBottom:13 }}>
+        <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE, marginBottom:11 }}>Question Pattern</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:11 }}>
+          {[["MCQs (1 mk)",mcqs,setMcqs,"Multiple choice questions"],["Short Ans. (3 mk)",shortQ,setShortQ,"Short answer questions"],["Long Ans. (6 mk)",longQ,setLongQ,"Essay / long answer questions"]].map(([label,val,set,tip])=>(
+            <Tip key={label} label={tip}><div><label style={{ display:"block", marginBottom:4, fontSize:11, fontWeight:700, color:"#5a8ab0", fontFamily:F }}>{label}</label><input type="number" min={0} max={30} value={val} onChange={e=>set(+e.target.value)} style={{ width:"100%", padding:"8px 10px", borderRadius:8, border:"2px solid #b8dff7", fontFamily:F, fontSize:14, boxSizing:"border-box", outline:"none", background:"#fff", color:DBLUE }}/></div></Tip>
+          ))}
+        </div>
+      </div>
+
+      {/* Sequence */}
+      <div style={{ padding:"13px 16px", background:"#f0f8ff", borderRadius:12, marginBottom:13 }}>
+        <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE, marginBottom:11 }}>Question Sequence</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {[{v:"easyFirst",icon:"📈",l:"Easy → Moderate → Hard",tip:"Build confidence then tackle harder questions"},{v:"hardFirst",icon:"📉",l:"Hard → Moderate → Easy",tip:"Tackle hardest questions when mind is fresh"},{v:"mixed",icon:"🔀",l:"Mixed / Uneven",tip:"Random difficulty distribution throughout paper"}].map(o=>(
+            <Tip key={o.v} label={o.tip}><Hover scale={1.02}><div onClick={()=>setSeq(o.v)} style={{ padding:"10px 13px", borderRadius:10, cursor:"pointer", border:`2px solid ${seq===o.v?BLUE:"#c0ddf0"}`, background:seq===o.v?LBLUE:"#fff", display:"flex", alignItems:"center", gap:10, transition:"all 0.15s" }}>
+              <span style={{ fontSize:16 }}>{o.icon}</span><span style={{ fontFamily:F, fontSize:13, fontWeight:700, color:DBLUE }}>{o.l}</span>
+            </div></Hover></Tip>
+          ))}
+        </div>
+      </div>
+
+      {/* Time & Marks */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:13 }}>
+        <Tip label="Total time allowed for the exam"><div><label style={{ display:"block", marginBottom:5, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>⏱ Time Limit (min)</label><input type="number" min={10} max={300} value={timeLimit} onChange={e=>setTimeLimit(+e.target.value)} style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"2px solid #b8dff7", fontFamily:F, fontSize:14, boxSizing:"border-box", outline:"none", background:"#fff", color:DBLUE }}/></div></Tip>
+        <Tip label="Total marks for the entire paper"><div><label style={{ display:"block", marginBottom:5, fontSize:13, fontWeight:700, color:DBLUE, fontFamily:F }}>📊 Total Marks</label><input type="number" min={10} max={500} value={totalMarks} onChange={e=>setTotalMarks(+e.target.value)} style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"2px solid #b8dff7", fontFamily:F, fontSize:14, boxSizing:"border-box", outline:"none", background:"#fff", color:DBLUE }}/></div></Tip>
+      </div>
+
+      {/* Watermark (teacher) */}
+      {isTeacher&&(
+        <div style={{ padding:"13px 16px", background:"#f0f8ff", borderRadius:12, marginBottom:13 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:addWm?12:0 }}>
+            <input type="checkbox" checked={addWm} onChange={e=>setAddWm(e.target.checked)} id="wmC" style={{ width:15, height:15, accentColor:BLUE }}/>
+            <label htmlFor="wmC" style={{ fontFamily:F, fontWeight:700, fontSize:13, color:DBLUE, cursor:"pointer" }}>🔏 Add Watermark to Paper</label>
+          </div>
+          {addWm&&<Inp value={wm} onChange={setWm} placeholder="e.g. Confidential – ABC School 2025"/>}
+        </div>
+      )}
+
+      <Btn full disabled={!subject||total!==100} onClick={()=>onNext({...config,subject,language:lang,easy,moderate,hard,mcqs,shortQ,longQ,timeLimit,totalMarks,watermark:addWm?wm:"",sequence:seq})} tip="Generate your complete AI exam paper in ~30 seconds">🤖 Generate Paper with AI →</Btn>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Generating
+═══════════════════════════════════════════════════════════ */
+function Generating({ config, onDone }) {
+  const steps=["Connecting to AI engine...","Fetching official syllabus...","Analysing past year papers...","Generating questions...","Creating answer key & explanations...","Finalising paper format..."];
+  const [step,setStep]=useState(0);
+  useEffect(()=>{
+    let i=0; const iv=setInterval(()=>{if(++i<steps.length-1)setStep(i);else clearInterval(iv);},900);
+    generatePaper(config).then(paper=>{clearInterval(iv);setStep(steps.length-1);setTimeout(()=>onDone(paper),600);});
+    return()=>clearInterval(iv);
+  },[]);
+  return (
+    <Card style={{ textAlign:"center" }}>
+      <style>{`@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`}</style>
+      <div style={{ fontSize:52, marginBottom:16, display:"inline-block", animation:"spin 2s linear infinite" }}>🤖</div>
+      <H sub="This takes about 30 seconds — please wait">Generating Your Paper...</H>
+      <div style={{ textAlign:"left", marginBottom:22 }}>
+        {steps.map((s,idx)=><div key={s} style={{ display:"flex", alignItems:"center", gap:12, padding:"7px 0", opacity:idx<=step?1:0.3, transition:"opacity 0.4s" }}>
+          <div style={{ width:22, height:22, borderRadius:"50%", flexShrink:0, background:idx<step?"#28a745":idx===step?BLUE:"#c0ddf0", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:11, fontWeight:800 }}>{idx<step?"✓":idx+1}</div>
+          <span style={{ fontFamily:F, fontSize:13, color:idx<=step?DBLUE:"#aaa" }}>{s}</span>
+        </div>)}
+      </div>
+      <div style={{ background:"#d0e8f7", borderRadius:99, height:8, overflow:"hidden" }}><div style={{ height:"100%", borderRadius:99, background:"linear-gradient(90deg,#4ab0f5,#1a7fd4)", width:`${((step+1)/steps.length)*100}%`, transition:"width 0.6s" }}/></div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Test
+═══════════════════════════════════════════════════════════ */
+function TestScreen({ paper, config, onFinish, userName, onResult, onViewResults }) {
+  const [answers,setAnswers]=useState({}); const [timeLeft,setTimeLeft]=useState(config.timeLimit*60); const [submitted,setSubmitted]=useState(false);
+  useEffect(()=>{
+    if(submitted) return;
+    const iv=setInterval(()=>setTimeLeft(t=>{if(t<=1){handleSubmit();return 0;}return t-1;}),1000);
+    return()=>clearInterval(iv);
+  },[submitted]);
+  const mins=Math.floor(timeLeft/60); const secs=timeLeft%60;
+
+  const calcScore=useCallback(()=>{
+    let correct=0,mcqTotal=0;
+    paper?.sections?.forEach(sec=>sec.questions?.forEach(q=>{if(q.options){mcqTotal++;if(answers[`${sec.name}-${q.id}`]===q.answer)correct++;}}));
+    const pct=mcqTotal?Math.round((correct/mcqTotal)*100):70;
+    return {correct,mcqTotal,pct,score:Math.round(pct*config.totalMarks/100)};
+  },[answers,paper,config]);
+
+  const handleSubmit=()=>{
+    const {score}=calcScore();
+    setSubmitted(true);
+    onResult&&onResult({name:userName,score,total:config.totalMarks,subject:config.subject,standard:config.standard||config.degree,board:config.board||config.university,date:new Date().toISOString()});
+  };
+
+  if(!paper) return <Card><BackBtn onClick={onFinish}/><H>Paper generation failed.</H><Btn onClick={onFinish}>← Go Back</Btn></Card>;
+
+  if(submitted) {
+    const {correct,mcqTotal,pct,score}=calcScore();
+    const grade=pct>=90?"A+":pct>=75?"A":pct>=60?"B":pct>=45?"C":"D";
+    return (
+      <Card style={{ maxWidth:820 }}>
+        <div style={{ textAlign:"center", marginBottom:24 }}>
+          <div style={{ fontSize:56 }}>{pct>=70?"🎉":"📝"}</div>
+          <h2 style={{ fontFamily:FH, fontSize:24, color:DBLUE, margin:"12px 0 4px" }}>Test Completed!</h2>
+          <div style={{ display:"flex", justifyContent:"center", gap:14, marginTop:14, flexWrap:"wrap" }}>
+            {[["Score",`${score}/${config.totalMarks}`],["Grade",grade],["Percentage",`${pct}%`],["MCQs",`${correct}/${mcqTotal}`]].map(([k,v])=>(
+              <div key={k} style={{ textAlign:"center", padding:"10px 18px", background:LBLUE, borderRadius:12, border:"1.5px solid #b8dff7" }}>
+                <div style={{ fontFamily:F, fontSize:11, color:"#5a8ab0", fontWeight:700 }}>{k}</div>
+                <div style={{ fontFamily:FH, fontSize:20, fontWeight:900, color:BLUE, marginTop:3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop:18, background:"#d0e8f7", borderRadius:99, height:10, overflow:"hidden" }}>
+            <div style={{ height:"100%", borderRadius:99, width:`${pct}%`, background:pct>=70?"linear-gradient(90deg,#28a745,#20c997)":"linear-gradient(90deg,#ffc107,#fd7e14)", transition:"width 1.2s" }}/>
+          </div>
+          {/* View Progress button */}
+          <div style={{ marginTop:16 }}>
+            <Tip label="View your complete test history and progress graph">
+              <Hover scale={1.04}><button onClick={onViewResults} style={{ padding:"10px 24px", borderRadius:10, background:"linear-gradient(135deg,#28a745,#20c997)", color:"#fff", border:"none", fontFamily:F, fontWeight:800, fontSize:14, cursor:"pointer", boxShadow:"0 4px 14px rgba(40,167,69,0.35)", transition:"all 0.18s" }}>📊 View Progress Dashboard →</button></Hover>
+            </Tip>
+          </div>
+        </div>
+
+        {/* Solutions */}
+        {paper.sections?.map(sec=>(
+          <div key={sec.name} style={{ marginBottom:20 }}>
+            <h3 style={{ fontFamily:FH, fontSize:14, color:DBLUE, borderBottom:"2px solid #d0e8f7", paddingBottom:7, marginBottom:12 }}>{sec.name}</h3>
+            {sec.questions?.map(q=>{
+              const key=`${sec.name}-${q.id}`; const ua=answers[key]; const isRight=ua===q.answer;
+              return <div key={q.id} style={{ padding:"12px 14px", borderRadius:12, marginBottom:9, background:q.options?(isRight?"#e8f8ee":"#fff0f0"):"#f0f8ff", border:`1.5px solid ${q.options?(isRight?"#90d4a0":"#f4a0a0"):"#b8dff7"}` }}>
+                <div style={{ fontFamily:F, fontSize:13, fontWeight:700, color:DBLUE, marginBottom:5 }}>Q{q.id}. {q.text}</div>
+                {q.options&&<div style={{ fontFamily:F, fontSize:12, marginBottom:5 }}><span style={{ color:"#888" }}>Your answer: </span><span style={{ color:isRight?"#28a745":"#dc3545", fontWeight:800 }}>{ua||"Not answered"}</span>{!isRight&&<span style={{ marginLeft:8, color:"#28a745", fontWeight:700 }}>✓ {q.answer}</span>}</div>}
+                {!q.options&&<div style={{ fontFamily:F, fontSize:12, marginBottom:5, background:"#fff", padding:"7px 10px", borderRadius:8 }}><strong>Model Answer:</strong> {q.answer}</div>}
+                <div style={{ fontFamily:F, fontSize:12, color:"#4a6a8a", background:"rgba(255,255,255,0.7)", padding:"7px 10px", borderRadius:8 }}><strong>💡 Explanation:</strong> {q.explanation}</div>
+              </div>;
+            })}
+          </div>
+        ))}
+
+        {/* Video solutions */}
+        <div style={{ padding:"13px 16px", background:"#fffbe6", borderRadius:12, marginBottom:16, border:"1.5px solid #ffe082" }}>
+          <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:"#5a4a00", marginBottom:7 }}>📺 Video Explanations from YouTube</div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            {[`${config.subject} ${config.board||config.university} solutions`,`${config.subject} class ${config.standard||config.degree} important questions`,`${config.subject} exam preparation tips`].map(q=>(
+              <Hover key={q} scale={1.04}><a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`} target="_blank" rel="noreferrer" style={{ padding:"6px 12px", borderRadius:8, background:"#ff0000", color:"#fff", fontSize:11, fontWeight:700, fontFamily:F, textDecoration:"none", display:"flex", alignItems:"center", gap:4 }}>▶️ {q.slice(0,28)}...</a></Hover>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <Tip label="Go back to home"><Btn onClick={onFinish} style={{ flex:1 }}>🏠 Home</Btn></Tip>
+          <Tip label="Download the exam paper as PDF"><Btn variant="secondary" style={{ flex:1 }}>📄 Download Paper PDF</Btn></Tip>
+          <Tip label="Download the complete solution PDF"><Btn variant="outline" style={{ flex:1 }}>📋 Download Solutions PDF</Btn></Tip>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{ maxWidth:820 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 16px", background:timeLeft<300?"#fff0f0":LBLUE, borderRadius:12, marginBottom:20, border:`1.5px solid ${timeLeft<300?"#f5a0a0":"#b8dff7"}`, position:"sticky", top:0 }}>
+        <div><div style={{ fontFamily:FH, fontSize:14, fontWeight:700, color:DBLUE }}>{paper.title}</div><div style={{ fontFamily:F, fontSize:11, color:"#5a8ab0" }}>{config.subject} • {config.totalMarks} marks</div></div>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontFamily:F, fontWeight:900, fontSize:20, color:timeLeft<300?"#dc3545":BLUE }}>⏱ {String(mins).padStart(2,"0")}:{String(secs).padStart(2,"0")}</div>
+          {timeLeft<300&&<div style={{ fontSize:10, color:"#dc3545", fontFamily:F, fontWeight:700 }}>⚠️ Less than 5 min!</div>}
+        </div>
+      </div>
+      {paper.instructions&&<div style={{ padding:"9px 13px", background:"#fffbe6", borderRadius:10, marginBottom:16, border:"1.5px solid #ffe082" }}>{paper.instructions.map((ins,i)=><div key={i} style={{ fontFamily:F, fontSize:12, color:"#5a4a00", marginBottom:2 }}>📌 {ins}</div>)}</div>}
+      {config.watermark&&<div style={{ textAlign:"center", fontSize:10, color:"#ccc", fontFamily:F, letterSpacing:3, marginBottom:12, textTransform:"uppercase" }}>🔏 {config.watermark}</div>}
+      {paper.sections?.map(sec=>(
+        <div key={sec.name} style={{ marginBottom:24 }}>
+          <h3 style={{ fontFamily:FH, fontSize:15, color:DBLUE, borderBottom:"2px solid #d0e8f7", paddingBottom:7, marginBottom:14 }}>{sec.name} <span style={{ fontSize:12, fontWeight:400, color:"#5a8ab0" }}>({sec.marks_per_q} mk each)</span></h3>
+          {sec.questions?.map(q=>{
+            const key=`${sec.name}-${q.id}`;
+            return <Hover key={q.id} scale={1.005}><div style={{ marginBottom:14, padding:"13px 15px", background:"#f7fbff", borderRadius:12, border:"1.5px solid #d0e8f7", transition:"box-shadow 0.15s" }}>
+              <div style={{ fontFamily:F, fontSize:13, fontWeight:700, color:DBLUE, marginBottom:9 }}>{q.id}. {q.text}</div>
+              {q.options ? (
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {q.options.map(opt=><label key={opt} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", padding:"7px 11px", borderRadius:8, background:answers[key]===opt?LBLUE:"#fff", border:`1.5px solid ${answers[key]===opt?BLUE:"#d0e8f7"}`, transition:"all 0.15s" }}>
+                    <input type="radio" name={key} checked={answers[key]===opt} onChange={()=>setAnswers(a=>({...a,[key]:opt}))} style={{ accentColor:BLUE }}/>
+                    <span style={{ fontFamily:F, fontSize:13, color:DBLUE }}>{opt}</span>
+                  </label>)}
+                </div>
+              ) : (
+                <textarea value={answers[key]||""} onChange={e=>setAnswers(a=>({...a,[key]:e.target.value}))} placeholder="Write your answer here..." rows={sec.marks_per_q>=6?6:3} style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"2px solid #b8dff7", fontFamily:F, fontSize:13, boxSizing:"border-box", outline:"none", resize:"vertical", background:"#fff", color:DBLUE }}/>
+              )}
+            </div></Hover>;
+          })}
+        </div>
+      ))}
+      <Tip label="Submit all answers and see your score, solutions & progress"><Btn full onClick={handleSubmit}>Submit Paper 📤</Btn></Tip>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCREEN: Teacher Paper View
+═══════════════════════════════════════════════════════════ */
+function TeacherView({ paper, config, onBack, allResults }) {
+  const [copied,setCopied]=useState(false);
+  const [copiedPdf,setCopiedPdf]=useState(false);
+  const [viewMode,setViewMode]=useState("teacher"); // "teacher" = with answers | "student" = questions only
+  const link=useRef(`https://edupaper.ai/test/${Math.random().toString(36).substr(2,9)}`);
+  if(!paper) return <Card><BackBtn onClick={onBack}/><H>Generation failed.</H><Btn onClick={onBack}>← Try Again</Btn></Card>;
+  const rs=Object.entries(allResults||{});
+  const scores=rs.map(([,r])=>r.score/r.total);
+  const avg=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*100):0;
+
+  return (
+    <Card style={{ maxWidth:860 }}>
+      <BackBtn onClick={onBack}/>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:18, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <h2 style={{ fontFamily:FH, fontSize:19, color:DBLUE, margin:0 }}>{paper.title}</h2>
+          <p style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", margin:"4px 0 0" }}>{config.subject} • {config.timeLimit} min • {config.totalMarks} marks {config.watermark&&"• 🔏 Watermarked"}</p>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Tip label="Download complete paper with answer key (for teacher only)"><Btn variant="secondary" style={{ fontSize:11, padding:"6px 13px" }}>📄 Full PDF (with Answers)</Btn></Tip>
+          <Tip label="Download questions-only PDF to print and distribute to students"><Btn variant="outline" style={{ fontSize:11, padding:"6px 13px" }}>🖨️ Print-Ready PDF (Questions Only)</Btn></Tip>
+        </div>
+      </div>
+
+      {/* Share section — questions only */}
+      <div style={{ padding:"15px 18px", background:"linear-gradient(135deg,#e8f4ff,#f0f8ff)", borderRadius:14, marginBottom:20, border:"2px solid #b8dff7" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+          <div style={{ fontFamily:F, fontSize:13, fontWeight:800, color:DBLUE }}>🔗 Share Paper with Students</div>
+          <div style={{ background:"#28a745", color:"#fff", fontSize:9, fontWeight:900, padding:"3px 9px", borderRadius:99, fontFamily:F }}>QUESTIONS ONLY</div>
+        </div>
+        <div style={{ padding:"8px 12px", background:"rgba(255,255,255,0.7)", borderRadius:8, marginBottom:10, fontFamily:F, fontSize:12, color:"#5a8ab0", border:"1px dashed #90c8e8" }}>
+          🔒 <strong>Privacy protected:</strong> Students will only see the question paper. Answers and explanations are hidden until after they submit.
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10, flexWrap:"wrap" }}>
+          <code style={{ flex:1, padding:"9px 12px", background:"#fff", border:"1.5px solid #b8dff7", borderRadius:8, fontFamily:"monospace", fontSize:11, color:DBLUE, wordBreak:"break-all" }}>{link.current}</code>
+          <Tip label="Copy the student test link (opens questions-only paper)">
+            <Btn variant="primary" style={{ fontSize:11, padding:"6px 14px", flexShrink:0 }} onClick={()=>{navigator.clipboard?.writeText(link.current);setCopied(true);setTimeout(()=>setCopied(false),2000)}}>{copied?"✓ Link Copied!":"📋 Copy Link"}</Btn>
+          </Tip>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Tip label="Download questions-only PDF to share/WhatsApp to students">
+            <Hover scale={1.03}><button onClick={()=>{setCopiedPdf(true);setTimeout(()=>setCopiedPdf(false),2000)}} style={{ padding:"7px 16px", borderRadius:8, background:"#28a745", color:"#fff", border:"none", fontFamily:F, fontWeight:800, fontSize:12, cursor:"pointer", display:"flex", alignItems:"center", gap:6, transition:"all 0.18s" }}>{copiedPdf?"✓ Downloaded!":"📲 Download Student PDF (Questions Only)"}</button></Hover>
+          </Tip>
+          <Tip label="Preview exactly what students will see when they open the link">
+            <Hover scale={1.03}><button onClick={()=>setViewMode(viewMode==="student"?"teacher":"student")} style={{ padding:"7px 16px", borderRadius:8, background:viewMode==="student"?"#1a7fd4":"#f0f8ff", color:viewMode==="student"?"#fff":BLUE, border:"1.5px solid #b8dff7", fontFamily:F, fontWeight:800, fontSize:12, cursor:"pointer", transition:"all 0.18s" }}>{viewMode==="student"?"👩‍🏫 Switch to Teacher View":"👁️ Preview Student View"}</button></Hover>
+          </Tip>
+        </div>
+      </div>
+
+      {/* View mode toggle notice */}
+      {viewMode==="student"&&(
+        <div style={{ padding:"10px 14px", background:"#fff3cd", borderRadius:10, marginBottom:16, fontFamily:F, fontSize:12, color:"#856404", border:"1.5px solid #ffe082", display:"flex", alignItems:"center", gap:8 }}>
+          👁️ <strong>Student Preview Mode:</strong> This is exactly what students will see — questions only, no answers or explanations.
+        </div>
+      )}
+
+      {/* Student progress */}
+      {rs.length>0&&viewMode==="teacher"&&(
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE, marginBottom:11 }}>📊 Student Progress <span style={{ fontWeight:600, color:"#5a8ab0", fontSize:11 }}>Class avg: {avg}%</span></div>
+          <ProgressChart results={rs.map(([name,r])=>({...r,subject:name}))}/>
+          <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:12 }}>
+            {rs.map(([name,r])=>{
+              const p=Math.round((r.score/r.total)*100); const color=p>=75?"#28a745":p>=50?"#ffc107":"#dc3545";
+              return <div key={name} style={{ padding:"10px 14px", background:"#f7fbff", borderRadius:10, border:"1.5px solid #d0e8f7" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", fontFamily:F, fontSize:13, marginBottom:5 }}><span style={{ fontWeight:700, color:DBLUE }}>{name}</span><span style={{ fontWeight:800, color }}>{r.score}/{r.total} ({p}%)</span></div>
+                <div style={{ background:"#d0e8f7", borderRadius:99, height:6 }}><div style={{ height:"100%", borderRadius:99, background:p>=75?"linear-gradient(90deg,#28a745,#20c997)":"linear-gradient(90deg,#ffc107,#fd7e14)", width:`${p}%`, transition:"width 0.7s" }}/></div>
+              </div>;
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Paper display - teacher sees answers, student sees questions only */}
+      <div style={{ borderTop:"2px solid #d0e8f7", paddingTop:18 }}>
+        <div style={{ fontFamily:F, fontWeight:800, fontSize:13, color:DBLUE, marginBottom:14 }}>
+          {viewMode==="teacher" ? "📄 Full Paper Preview (with Answers)" : "📄 Questions Paper (Student View)"}
+        </div>
+        {config.watermark&&<div style={{ textAlign:"center", fontSize:10, color:"#bbb", fontFamily:F, letterSpacing:3, marginBottom:12, textTransform:"uppercase" }}>🔏 {config.watermark}</div>}
+        {paper.sections?.map(sec=><div key={sec.name} style={{ marginBottom:20 }}>
+          <h3 style={{ fontFamily:FH, fontSize:14, color:DBLUE, borderBottom:"2px solid #d0e8f7", paddingBottom:7, marginBottom:12 }}>
+            {sec.name} <span style={{ fontWeight:400, fontSize:12, color:"#5a8ab0" }}>({sec.marks_per_q} mark{sec.marks_per_q>1?"s":""} each)</span>
+          </h3>
+          {sec.questions?.map(q=><div key={q.id} style={{ padding:"11px 13px", borderRadius:10, marginBottom:9, background:"#f7fbff", border:"1.5px solid #d0e8f7" }}>
+            <div style={{ fontFamily:F, fontSize:13, fontWeight:700, color:DBLUE, marginBottom:6 }}>{q.id}. {q.text}</div>
+            {q.options&&<div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:viewMode==="teacher"?6:0 }}>
+              {q.options.map(o=><span key={o} style={{
+                padding:"3px 9px", borderRadius:6, fontFamily:F, fontSize:11,
+                background: viewMode==="teacher" && o===q.answer ? "#e8f8ee" : "#fff",
+                border: `1.5px solid ${viewMode==="teacher" && o===q.answer ? "#90d4a0" : "#d0e8f7"}`,
+                color: viewMode==="teacher" && o===q.answer ? "#1a6630" : "#5a8ab0",
+              }}>{o}</span>)}
+            </div>}
+            {/* Show answers only in teacher view */}
+            {viewMode==="teacher"&&<div style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", background:"#fff", padding:"6px 10px", borderRadius:8, marginTop:4 }}><strong>✓ Answer:</strong> {q.answer}</div>}
+            {viewMode==="teacher"&&!q.options&&<div style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", background:"#fff", padding:"6px 10px", borderRadius:8, marginTop:4 }}><strong>Model Answer:</strong> {q.answer}</div>}
+            {/* In student view, show blank answer space */}
+            {viewMode==="student"&&!q.options&&<div style={{ marginTop:8, padding:"10px 12px", background:"#fff", border:"1.5px dashed #b8dff7", borderRadius:8, minHeight:50, fontFamily:F, fontSize:12, color:"#bbb" }}>[Answer space]</div>}
+          </div>)}
+        </div>)}
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MAIN APP
+═══════════════════════════════════════════════════════════ */
+export default function App() {
+  const [screen,setScreen]=useState("home");
+  const [userData,setUserData]=useState({});
+  const [role,setRole]=useState(null);
+  const [cfg,setCfg]=useState({});
+  const [paper,setPaper]=useState(null);
+  const [results,setResults]=useState({}); // teacher: name->result
+  const [myResults,setMyResults]=useState([]); // student personal history
+
+  const go=s=>setScreen(s);
+
+  const addResult=r=>{
+    setResults(p=>({...p,[r.name]:r}));
+    setMyResults(p=>[...p, r]);
+    if(userData.email&&USERS_DB[userData.email]){
+      USERS_DB[userData.email].results=[...(USERS_DB[userData.email].results||[]),r];
+    }
+  };
+
+  if(screen==="home") return (<><style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Nunito:wght@400;600;700;800;900&display=swap');*{box-sizing:border-box;}body{margin:0;}`}</style><Homepage onStart={()=>go("signup")}/></>);
+
+  const BG={minHeight:"100vh",background:"linear-gradient(160deg,#caeaf8 0%,#a8d8f0 45%,#88c4e8 100%)",display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"36px 16px 60px",boxSizing:"border-box"};
+
+  const SCREENS={
+    signup:<Signup onNext={d=>{setUserData(d);go("designation");}}/>,
+    designation:<Designation onBack={()=>go("signup")} onSelect={r=>{setRole(r.toLowerCase());go(r==="Teacher"?"teacherPw":"studentLevel");}}/>,
+    teacherPw:<TeacherPw onBack={()=>go("designation")} onNext={()=>go("teacherMethod")} allResults={results}/>,
+    teacherMethod:<TeacherMethod onBack={()=>go("teacherPw")} onSelect={m=>go(m==="manual"?"manualEditor":"teacherLevel")}/>,
+    manualEditor:<ManualEditor onBack={()=>go("teacherMethod")}/>,
+    teacherLevel:<LevelSelect role="teacher" onBack={()=>go("teacherMethod")} onNext={d=>{setCfg({...d,role:"teacher"});go("teacherBoard");}}/>,
+    teacherBoard:<BoardSelect levelData={cfg} onBack={()=>go("teacherLevel")} onNext={d=>{setCfg(d);go("paperConfig");}}/>,
+    studentLevel:<LevelSelect role="student" onBack={()=>go("designation")} onNext={d=>{setCfg({...d,role:"student"});go("studentBoard");}}/>,
+    studentBoard:<BoardSelect levelData={cfg} onBack={()=>go("studentLevel")} onNext={d=>{setCfg(d);go("paperConfig");}}/>,
+    paperConfig:<PaperConfig config={cfg} onBack={()=>go(cfg.role==="teacher"?"teacherBoard":"studentBoard")} onNext={c=>{setCfg(c);go("generating");}}/>,
+    generating:<Generating config={cfg} onDone={p=>{setPaper(p);go(cfg.role==="teacher"?"teacherView":"test");}}/>,
+    teacherView:<TeacherView paper={paper} config={cfg} onBack={()=>go("teacherMethod")} allResults={results}/>,
+    test:<TestScreen paper={paper} config={cfg} userName={`${userData.firstName||"Student"} ${userData.lastName||""}`.trim()} onFinish={()=>{go("studentLevel");setPaper(null);setCfg({});}} onResult={addResult} onViewResults={()=>go("results")}/>,
+    results:<ResultPage results={myResults} onBack={()=>go("test")}/>,
+  };
+
+  return (
+    <>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Nunito:wght@400;600;700;800;900&display=swap');*{box-sizing:border-box;}body{margin:0;}::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#e8f4ff;}::-webkit-scrollbar-thumb{background:#90c8e8;border-radius:99px;}`}</style>
+      <div style={BG}>
+        <div style={{ width:"100%", display:"flex", flexDirection:"column", alignItems:"center" }}>
+          <div style={{ marginBottom:20, display:"flex", alignItems:"center", gap:18, flexWrap:"wrap", justifyContent:"center" }}>
+            <Tip label="Return to homepage">
+              <Hover scale={1.04}><div style={{ fontFamily:FH, fontSize:22, fontWeight:900, color:DBLUE, cursor:"pointer" }} onClick={()=>go("home")}>📚 EduPaper AI</div></Hover>
+            </Tip>
+            {role&&<div style={{ fontFamily:F, fontSize:12, color:"#5a8ab0", background:"rgba(255,255,255,0.5)", padding:"4px 12px", borderRadius:99, border:"1px solid rgba(255,255,255,0.6)" }}>{role.charAt(0).toUpperCase()+role.slice(1)} · {userData.firstName||""}</div>}
+            {myResults.length>0&&role==="student"&&(
+              <Tip label="View your progress dashboard with all test history">
+                <Hover scale={1.04}><button onClick={()=>go("results")} style={{ padding:"6px 16px", borderRadius:99, background:LBLUE, color:BLUE, border:"1.5px solid #b8dff7", fontFamily:F, fontWeight:800, fontSize:12, cursor:"pointer" }}>📊 My Progress ({myResults.length})</button></Hover>
+              </Tip>
+            )}
+          </div>
+          {SCREENS[screen]||SCREENS["signup"]}
+        </div>
+      </div>
+    </>
+  );
+}
